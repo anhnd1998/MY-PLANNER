@@ -53,6 +53,10 @@
             </div>
             
             <div class="flex flex-wrap items-center gap-3">
+                <!-- Share Link Button -->
+                <button onclick="copyShareLink()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-3 py-2 rounded-lg text-xs sm:text-sm flex items-center gap-2 shadow transition-all">
+                    <i class="fa-solid fa-share-nodes"></i> Chia sẻ phòng học chung
+                </button>
                 <!-- User ID Badge -->
                 <div id="user-status-badge" class="bg-slate-800 border border-slate-700 text-xs text-slate-300 px-3 py-1.5 rounded-lg flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse" id="connection-dot"></span>
@@ -241,7 +245,9 @@
         };
 
         function initRealtimeSync() {
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'toeic_plan_state');
+            // FIX: Firestore doc paths require an even number of segments (collection/doc/collection/doc). 
+            // We use a clean collection and document ID structure: artifacts/toeic_planner_shared/room/data
+            const docRef = doc(db, 'artifacts', 'toeic_planner_shared', 'room', 'data');
             
             onSnapshot(docRef, (docSnap) => {
                 if (docSnap.exists()) {
@@ -262,12 +268,23 @@
         async function saveDataToCloud() {
             if (!db) return;
             try {
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'toeic_plan_state');
+                const docRef = doc(db, 'artifacts', 'toeic_planner_shared', 'room', 'data');
                 await setDoc(docRef, remoteData);
             } catch (e) {
                 console.error("Error saving data:", e);
             }
         }
+
+        window.copyShareLink = function() {
+            const shareUrl = window.location.href.split('#')[0];
+            const dummy = document.createElement('input');
+            document.body.appendChild(dummy);
+            dummy.value = shareUrl;
+            dummy.select();
+            document.execCommand('copy');
+            document.body.removeChild(dummy);
+            showModal("Đã sao chép link!", "Hãy gửi link này cho bạn bè hoặc mở ở tab ẩn danh khác. Mọi người sẽ cùng xem và chỉnh sửa chung một bảng theo dõi thời gian thực này nhé!");
+        };
 
         window.toggleCheck = function(key) {
             remoteData.checks[key] = !remoteData.checks[key];
