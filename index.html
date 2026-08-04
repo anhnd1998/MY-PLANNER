@@ -60,7 +60,7 @@
                 <!-- User ID Badge -->
                 <div id="user-status-badge" class="bg-slate-800 border border-slate-700 text-xs text-slate-300 px-3 py-1.5 rounded-lg flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-amber-500 animate-pulse" id="connection-dot"></span>
-                    <span id="user-id-text">Đang kết nối...</span>
+                    <span id="user-id-text">Đang kết nối đám mây...</span>
                 </div>
                 <button onclick="window.print()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg text-sm flex items-center gap-2 shadow transition-all">
                     <i class="fa-solid fa-print"></i> In / Xuất PDF
@@ -162,10 +162,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'toeic-planner-default';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         let app, db, auth, userId;
         let remoteData = { checks: {}, texts: {} };
@@ -219,7 +216,10 @@
 
         window.onload = async function() {
             try {
-                app = initializeApp(firebaseConfig);
+                if (typeof __firebase_config === 'undefined' || !__firebase_config) {
+                    throw new Error("Missing Firebase config");
+                }
+                app = initializeApp(JSON.parse(__firebase_config));
                 db = getFirestore(app);
                 auth = getAuth(app);
 
@@ -230,48 +230,62 @@
                 }
 
                 userId = auth.currentUser ? auth.currentUser.uid : 'anonymous';
-                document.getElementById('user-id-text').innerText = `ID: ${userId.substring(0, 8)}... (Đã kết nối)`;
-                document.getElementById('connection-dot').classList.remove('bg-amber-500', 'animate-pulse');
-                document.getElementById('connection-dot').classList.add('bg-emerald-500');
-
+                
+                // Test read/write or start snapshot
                 initRealtimeSync();
             } catch (err) {
-                console.error("Firebase connection error:", err);
-                document.getElementById('user-id-text').innerText = "Chế độ lưu cục bộ (Lỗi kết nối)";
-                document.getElementById('connection-dot').classList.remove('bg-amber-500', 'animate-pulse');
-                document.getElementById('connection-dot').classList.add('bg-red-500');
-                renderPlanner();
+                console.warn("Firebase permission or auth warning, falling back to robust local mode:", err);
+                enableLocalMode("Chế độ lưu cục bộ (Quyền truy cập hạn chế)");
             }
         };
 
+        function enableLocalMode(reasonText) {
+            document.getElementById('user-id-text').innerText = reasonText;
+            document.getElementById('connection-dot').classList.remove('bg-amber-500', 'animate-pulse', 'bg-emerald-500');
+            document.getElementById('connection-dot').classList.add('bg-blue-500');
+            
+            const localSaved = localStorage.getItem('toeic_planner_local_data_v2');
+            if (localSaved) {
+                try { remoteData = JSON.parse(localSaved); } catch(e){}
+            }
+            renderPlanner();
+            updateProgressStats();
+        }
+
         function initRealtimeSync() {
-            // FIX: Firestore doc paths require an even number of segments (collection/doc/collection/doc). 
-            // We use a clean collection and document ID structure: artifacts/toeic_planner_shared/room/data
-            const docRef = doc(db, 'artifacts', 'toeic_planner_shared', 'room', 'data');
+            const appId = (typeof __app_id !== 'undefined' && __app_id) ? __app_id : 'toeic-planner-global';
+            const docRef = doc(db, 'artifacts', appId, 'public_room', 'data');
             
             onSnapshot(docRef, (docSnap) => {
                 if (docSnap.exists()) {
-                    remoteData = docSnap.data();
-                    if (!remoteData.checks) remoteData.checks = {};
-                    if (!remoteData.texts) remoteData.texts = {};
+                    const data = docSnap.data();
+                    if (data && data.checks) remoteData.checks = data.checks;
+                    if (data && data.texts) remoteData.texts = data.texts;
                 } else {
-                    remoteData = { checks: {}, texts: {} };
+                    setDoc(docRef, remoteData).catch(e => console.warn(e));
                 }
+                document.getElementById('user-id-text').innerText = `Kết nối đám mây thành công`;
+                document.getElementById('connection-dot').classList.remove('bg-amber-500', 'animate-pulse', 'bg-blue-500');
+                document.getElementById('connection-dot').classList.add('bg-emerald-500');
                 renderPlanner();
                 updateProgressStats();
             }, (error) => {
-                console.error("Snapshot error:", error);
-                renderPlanner();
+                console.warn("Snapshot sync error handled:", error);
+                // Fallback to local mode gracefully if permission denied
+                enableLocalMode("Chế độ lưu cục bộ (Lỗi quyền)");
             });
         }
 
         async function saveDataToCloud() {
+            localStorage.setItem('toeic_planner_local_data_v2', JSON.stringify(remoteData));
+
             if (!db) return;
             try {
-                const docRef = doc(db, 'artifacts', 'toeic_planner_shared', 'room', 'data');
+                const appId = (typeof __app_id !== 'undefined' && __app_id) ? __app_id : 'toeic-planner-global';
+                const docRef = doc(db, 'artifacts', appId, 'public_room', 'data');
                 await setDoc(docRef, remoteData);
             } catch (e) {
-                console.error("Error saving data:", e);
+                console.warn("Cloud save skipped due to permissions:", e);
             }
         }
 
@@ -339,7 +353,7 @@
 
                 phaseWeeks.forEach(w => {
                     const weekTitleKey = `w_${w.week}_title`;
-                    const currentWeekTitle = remoteData.texts[weekTitleKey] !== undefined ? remoteData.texts[weekTitleKey] : w.title;
+                    const currentWeekTitle = remoteData.texts && remoteData.texts[weekTitleKey] !== undefined ? remoteData.texts[weekTitleKey] : w.title;
 
                     html += `
                         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 space-y-4 print-break-inside-prevent transition-all hover:border-blue-200 hover:shadow-md">
@@ -371,10 +385,10 @@
                         const mornCheckedKey = `w_${w.week}_d_${dIdx}_morn_chk`;
                         const eveCheckedKey = `w_${w.week}_d_${dIdx}_eve_chk`;
 
-                        const mornText = remoteData.texts[morningKey] !== undefined ? remoteData.texts[morningKey] : "";
-                        const eveText = remoteData.texts[eveningKey] !== undefined ? remoteData.texts[eveningKey] : "";
-                        const isMornChecked = !!remoteData.checks[mornCheckedKey];
-                        const isEveChecked = !!remoteData.checks[eveCheckedKey];
+                        const mornText = remoteData.texts && remoteData.texts[morningKey] !== undefined ? remoteData.texts[morningKey] : "";
+                        const eveText = remoteData.texts && remoteData.texts[eveningKey] !== undefined ? remoteData.texts[eveningKey] : "";
+                        const isMornChecked = remoteData.checks && !!remoteData.checks[mornCheckedKey];
+                        const isEveChecked = remoteData.checks && !!remoteData.checks[eveCheckedKey];
 
                         const isSunday = day === "Chủ Nhật";
 
@@ -427,11 +441,11 @@
                     totalTasks += 2;
                     phaseCounts[w.phase].total += 2;
 
-                    if (remoteData.checks[mornCheckedKey]) {
+                    if (remoteData.checks && remoteData.checks[mornCheckedKey]) {
                         completedTasks++;
                         phaseCounts[w.phase].comp++;
                     }
-                    if (remoteData.checks[eveCheckedKey]) {
+                    if (remoteData.checks && remoteData.checks[eveCheckedKey]) {
                         completedTasks++;
                         phaseCounts[w.phase].comp++;
                     }
@@ -439,8 +453,10 @@
             });
 
             const overallPct = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-            document.getElementById('overall-pct').innerText = `${overallPct}%`;
-            document.getElementById('overall-progress-bar').style.width = `${overallPct}%`;
+            const overallEl = document.getElementById('overall-pct');
+            const overallBar = document.getElementById('overall-progress-bar');
+            if (overallEl) overallEl.innerText = `${overallPct}%`;
+            if (overallBar) overallBar.style.width = `${overallPct}%`;
 
             for (let p = 1; p <= 4; p++) {
                 const pTotal = phaseCounts[p].total;
